@@ -70,7 +70,8 @@ def _redact_cdp_output(value: Any, *, always_paths: tuple = (), flagged_paths: t
     redacted: Dict[str, Any] = {}
     for key, item in value.items():
         opaque = leaf(always_paths, key) or (leaf(flagged_paths, key) and base64_flagged)
-        redacted[key] = item if isinstance(item, str) and opaque else _redact_cdp_output(
+        out_key = redact_sensitive_text(key, force=True) if isinstance(key, str) else key  # by-value objects can carry a secret as a KEY
+        redacted[out_key] = item if isinstance(item, str) and opaque else _redact_cdp_output(
             item, always_paths=descend(always_paths, key), flagged_paths=descend(flagged_paths, key))
     return redacted
 
@@ -328,8 +329,9 @@ BROWSER_CDP_SCHEMA: Dict[str, Any] = {
         "config.yaml. Not currently wired up for cloud backends (Browserbase, Browser Use, Firecrawl) — "
         "those expose CDP per session but live-session routing is a follow-up. Camofox is REST-only and "
         "will never support CDP. If the tool is in your toolset at all, a CDP endpoint is already reachable.\n\n"
-        f"**CDP method reference:** {CDP_DOCS_URL} — use web_extract on a method's URL "
-        "(e.g. '/tot/Page/#method-handleJavaScriptDialog') to look up parameters and return shape.\n\n"
+        f"**CDP method reference:** {CDP_DOCS_URL} — use an available documentation lookup or extraction "
+        "tool on a method's URL (e.g. '/tot/Page/#method-handleJavaScriptDialog') to look up parameters and "
+        "return shape.\n\n"
         "**Common patterns:**\n"
         "- List tabs: method='Target.getTargets', params={}\n"
         "- Handle a native JS dialog: method='Page.handleJavaScriptDialog', "
