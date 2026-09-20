@@ -12,7 +12,7 @@ from typing import Optional
 # when it closes a single-letter abbreviation ("p.m. ET" — period preceded by
 # a lone word char). Input is already secret-redacted at the call site.
 _GATEWAY_RESET_HINT_RE = re.compile(
-    r"reset[s]?\b(?:[^\n.]|\.(?![\s])(?!$)|(?<=\b\w)\.){0,48}", re.IGNORECASE
+    r"reset[s]?\b(?=\s+(?:at\s+)?\d)(?:[^\n.]|\.(?![\s])(?!$)|(?<=\b\w)\.){0,48}", re.IGNORECASE
 )
 
 
