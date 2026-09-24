@@ -5,12 +5,13 @@ import { useNavigate } from 'react-router'
 import { ConnectionSwitcher } from '@/app/chat/sidebar/connection-switcher'
 import { ProfileSwitcher } from '@/app/chat/sidebar/profile-dropdown-switcher'
 import type { CommandCenterSection } from '@/app/command-center'
+import { toggleTerminalPane } from '@/app/right-sidebar/terminal/reveal-focus'
 import { useApprovalModeStatusbarItem } from '@/app/shell/approval-mode-menu'
 import { ContextUsagePanel } from '@/app/shell/context-usage-panel'
 import { GatewayMenuPanel } from '@/app/shell/gateway-menu-panel'
 import { useContextBreakdown } from '@/app/shell/hooks/use-context-breakdown'
 import { useSystemResourcesStatusbarItem } from '@/app/shell/system-resources-statusbar'
-import { $paneVisible, togglePaneVisible } from '@/components/pane-shell/tree/store'
+import { $paneVisible } from '@/components/pane-shell/tree/store'
 import { Badge } from '@/components/ui/badge'
 import { Codicon } from '@/components/ui/codicon'
 import { GlyphSpinner } from '@/components/ui/glyph-spinner'
@@ -34,7 +35,7 @@ import { cacheHitLabel, contextBarLabel, LiveDuration, tokensPerSecondLabel, usa
 import { useStoreSelector } from '@/lib/use-session-slice'
 import { cn } from '@/lib/utils'
 import { resolveVersionStatus } from '@/lib/version-status'
-import { copyFilePath, revealFile } from '@/store/file-actions'
+import { copyFilePath, revealFile, shouldOfferLocalReveal } from '@/store/file-actions'
 import { $freeTierStatus, FREE_TIER_MODEL } from '@/store/free-tier'
 import { openFreeTierSignIn } from '@/store/free-tier-sign-in'
 import { revealFileInTree } from '@/store/layout'
@@ -224,6 +225,17 @@ export function useStatusbarItems({
     return row?.cwd?.trim() || ''
   })
 
+  // Which backend the focused row runs on: a Connections-tagged row names its
+  // gateway; an untagged one is the window's primary. Decides whether the OS
+  // file manager on this computer can show its workspace at all.
+  const focusedRowConnectionId = useStoreSelector($sessions, sessions =>
+    focusedStoredSessionId
+      ? sessions.find(s => sessionMatchesStoredId(s, focusedStoredSessionId))?.connection_id?.trim() || ''
+      : ''
+  )
+
+  const offerLocalReveal = shouldOfferLocalReveal(focusedRowConnectionId, connection?.mode === 'remote')
+
   // Live runtime cwd is authoritative once it belongs to the focused chat
   // (agent can relocate mid-turn). Until then — cold tabs, mid-switch lag —
   // the stored session row is the selection's project. Primary drafts fall
@@ -290,8 +302,8 @@ export function useStatusbarItems({
   // only before that), and it is keyed to the session it describes. The global
   // `$currentUsage` is neither — a resumed session reports no context fields,
   // and the store merges rather than replaces, so the PREVIOUS session's gauge
-  // numbers survive the switch. Mid-turn there's no breakdown by design and
-  // the streamed usage carries the gauge.
+  // numbers survive the switch. Mid-turn useContextBreakdown returns null (the
+  // snapshot is pre-turn), so the streamed usage carries the gauge.
   const gaugeUsage = useMemo<UsageStats>(
     () =>
       contextBreakdown
@@ -534,8 +546,9 @@ export function useStatusbarItems({
               },
               // The OS file manager needs the local filesystem; a remote
               // backend's workspace is not on this computer (the sidebar
-              // trees already hide reveal the same way).
-              ...(focusedWorkspaceRemote
+              // trees already hide reveal the same way), and a row tagged
+              // with another gateway is never local either.
+              ...(focusedWorkspaceRemote || !offerLocalReveal
                 ? []
                 : [
                     {
@@ -611,6 +624,7 @@ export function useStatusbarItems({
       fileMenu.copyPath,
       fileMenu.revealFileManager,
       fileMenu.revealInSidebar,
+      offerLocalReveal,
       freeTier?.available,
       freeTier?.model,
       guideOwnsSignIn,
@@ -695,7 +709,7 @@ export function useStatusbarItems({
         hidden: !chatOpen,
         icon: <Terminal className="size-3.5" />,
         id: 'terminal',
-        onSelect: () => togglePaneVisible('terminal'),
+        onSelect: () => toggleTerminalPane(),
         title: terminalShowing ? copy.hideTerminal : copy.showTerminal,
         toggleLabel: copy.toggleTerminal,
         variant: 'action'

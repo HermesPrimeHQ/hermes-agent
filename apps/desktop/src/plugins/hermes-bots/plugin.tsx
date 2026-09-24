@@ -15,8 +15,16 @@
  * bot-initiated sends use `hermes -p <bot> chat --in ~ -c "Bot Chat"`.
  */
 
-import { CHAT_EMPTY_AREA, COMPOSER_AREAS, host, LocalizedTabTitle, PALETTE_AREA, translateNow } from '@hermes/plugin-sdk'
-import type { ChatEmptyProps, PluginContext } from '@hermes/plugin-sdk'
+import {
+  CHAT_EMPTY_AREA,
+  COMPOSER_AREAS,
+  host,
+  LocalizedTabTitle,
+  PALETTE_AREA,
+  SIDEBAR_PROFILE_GROUP_HEADER_AREA,
+  translateNow
+} from '@hermes/plugin-sdk'
+import type { ChatEmptyProps, PluginContext, ProfileGroupRoute } from '@hermes/plugin-sdk'
 
 import { startFaceClock, stopFaceClock } from './avatar'
 import {
@@ -49,6 +57,7 @@ import {
   $groupChatWorkspace,
   assignLegacyThreads,
   handleSessionsGatewayTransition,
+  hydrateGroupChatTombstones,
   pullGroupChatServerState,
   scheduleGroupChatServerSync,
   setGroupChatSyncDisposed,
@@ -70,6 +79,8 @@ import {
   sessionOwnsWorkspace
 } from './roster-pane'
 import { botRosterMeta, botWorkspaceOwnerKey, setBotsWorkspaceOwner } from './routing'
+import { startScreenAutoRaise } from './screen-autoraise'
+import { ProfileGroupScreenPortal } from './screen-portal'
 import { startHideSweepScheduler } from './session-sweep'
 import { bumpBotOpenGeneration, getBotOpenGeneration, ID, setPluginCtx } from './shared'
 import type { GroupChat, RosterRow } from './types'
@@ -107,6 +118,8 @@ export default {
     // The cross-connection relay rides every gateway socket this Desktop
     // holds: roster sync + envelope drain/deliver/reply loops.
     startBotRelay()
+    // Opt-in per bot: raise a bot's Screen tab on its first live screen tool call.
+    const stopScreenAutoRaise = startScreenAutoRaise()
 
     // Disabling the plugin (or a hot reload) must actually stop the clock —
     // before this, the rAF loop + 1Hz document scan ran until app restart.
@@ -114,6 +127,7 @@ export default {
       ctx.onDispose(disposeLocales)
       ctx.onDispose(stopFaceClock)
       ctx.onDispose(stopBotRelay)
+      ctx.onDispose(stopScreenAutoRaise)
     }
 
     // @-mention autocomplete: typing "@rese…" in ANY composer offers the
@@ -232,6 +246,21 @@ export default {
 
     // Hydrate persisted group-chat room logs (epoch/running are runtime-only
     // and always reset — a loop can't survive a window reload anyway).
+    // Disband memory must be in place before the first gateway pull merges
+    // a mirror that may still project a disbanded room (#105275) — the pull
+    // below awaits this, otherwise the first pull resurrects the room until
+    // the next one re-tombstones it.
+    let tombstonesHydrated: Promise<void> = Promise.resolve()
+
+    try {
+      // @ts-expect-error TODO(bot-mode-types): PluginStorage.get requires a fallback argument.
+      tombstonesHydrated = Promise.resolve(ctx.storage?.get?.('group-chat-tombstones'))
+        .then(value => hydrateGroupChatTombstones(value))
+        .catch(() => undefined)
+    } catch {
+      /* no storage — no remembered disbands this window */
+    }
+
     try {
       // @ts-expect-error TODO(bot-mode-types): PluginStorage.get requires a fallback argument.
       Promise.resolve(ctx.storage?.get?.('group-chats'))
@@ -253,6 +282,8 @@ export default {
                   // guard as the other maps — a held bot stays held across
                   // window restarts until explicitly released.
                   holds: room.holds && typeof room.holds === 'object' ? room.holds : {},
+                  externalCursors:
+                    room.externalCursors && typeof room.externalCursors === 'object' ? room.externalCursors : {},
                   members: Array.isArray(room.members) ? room.members : [],
                   roomId: typeof room.roomId === 'string' && room.roomId ? room.roomId : null,
                   image: typeof room.image === 'string' && room.image ? room.image : null,
@@ -308,6 +339,7 @@ export default {
           // Receive before publish. A fresh Desktop with no local room cache
           // must hydrate the gateway projection instead of merely avoiding an
           // empty overwrite and then rendering an empty conversation.
+          await tombstonesHydrated
           await pullGroupChatServerState().catch(() => false)
           scheduleGroupChatServerSync($groupChats.get())
         })
@@ -390,6 +422,13 @@ export default {
     // the meta/room storage hydrates above have landed; idempotent after that.
     // (Feature-guarded: bare vm test harnesses have no setTimeout global.)
     startHideSweepScheduler(ctx)
+    // Sessions sidebar: each gateway/profile group gets the profile's Screen portal
+    // above its sessions, so the bot's computer is reachable from either mode.
+    ctx.register({
+      id: 'screen-portal',
+      area: SIDEBAR_PROFILE_GROUP_HEADER_AREA,
+      data: { render: (route: ProfileGroupRoute) => <ProfileGroupScreenPortal route={route} /> }
+    })
     ctx.register({
       id: 'pane',
       area: 'panes',
